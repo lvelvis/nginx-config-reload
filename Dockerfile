@@ -12,7 +12,6 @@ WORKDIR /go/src/app
 
 RUN  go build -a -o nginx-reloader .
 
-##main image
 FROM nginx:1.12.1-alpine
 
 COPY --from=build /go/src/app/nginx-reloader /nginx-reloader
