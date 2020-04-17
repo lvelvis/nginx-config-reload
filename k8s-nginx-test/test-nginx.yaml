@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      name: nginx
+      labels:
+        app: nginx
+    spec:
+      shareProcessNamespace: true
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config-v01
+      containers:
+        - name: nginx
+          image: lvcisco/nginx-1.12.1-alpine:v1.12.1
+          ports:
+            - name: http
+              containerPort: 80
+            - name: https
+              containerPort: 443
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/config
+              readOnly: true           
+        - name: nginx-reloader
+          image: lvcisco/nginx-config-reload:v0.0.1
+          env:
+            - name: WATCH_NGINX_CONF_PATH
+              value: /etc/nginx/config
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/config
+              readOnly: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+spec:
+  selector:
+    app: nginx
+  ports:
+    - name: http
+      port: 80
+    - name: https
+      port: 443
