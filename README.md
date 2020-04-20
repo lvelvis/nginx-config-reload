@@ -1,7 +1,7 @@
 # nginx-config-reload  
 1.nginx-configmap配置热加载  
 2.sidecar方式共享process、volume 
-3.打开共享进程命名空间特性：shareProcessNamespace: true
+3.打开共享进程命名空间特性：shareProcessNamespace: true  
 
 #测试  
 ``` 
