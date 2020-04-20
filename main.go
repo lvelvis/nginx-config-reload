@@ -1,129 +1,111 @@
 /*
-    2020年4月17日 14:19:02 by elvis
-    kubernetes nginx configmap reload
+   2020年4月17日 14:19:02 by elvis
+   kubernetes nginx configmap reload
 
 */
 package main
 
 import (
-    "log"
-    "os"
-    "path/filepath"
-    "syscall"
-    "github.com/fsnotify/fsnotify"
-    proc "github.com/shirou/gopsutil/process"
+	"io/ioutil"
+	"log"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 const (
-    nginxProcessName = "nginx"
-    defaultNginxConfPath = "/etc/nginx"
-    watchPathEnvVarName = "WATCH_NGINX_CONF_PATH"
+	nginxProcessName     = "nginx"
+	defaultNginxConfPath = "/etc/nginx"
+	defaultNginxPidPath  = "/usr/local/nginx/logs/nginx.pid"
+	watchPidEnvVarName   = "WATCH_NGINX_PID_PATH"
+	watchPathEnvVarName  = "WATCH_NGINX_CONF_PATH"
 )
 
 var stderrLogger = log.New(os.Stderr, "error: ", log.Lshortfile)
 var stdoutLogger = log.New(os.Stdout, "", log.Lshortfile)
 
 func getMasterNginxPid() (int, error) {
-    processes, processesErr := proc.Processes()
-    if processesErr != nil {
-        return 0, processesErr
-    }
 
-    nginxProcesses := map[int32]int32{}
+	nginxPidPath, ok := os.LookupEnv(watchPidEnvVarName)
+	if !ok {
+		nginxPidPath = defaultNginxPidPath
+	}
 
-    for _, process := range processes {
-        processName, processNameErr := process.Name()
-        if processNameErr != nil {
-            return 0, processNameErr
-        }
+	//获取nginx的进程ID
+	pfile, err := os.Open(nginxPidPath)
+	defer pfile.Close()
 
-        if processName == nginxProcessName {
-            ppid, ppidErr := process.Ppid()
-
-            if ppidErr != nil {
-                return 0, ppidErr
-            }
-
-            nginxProcesses[process.Pid] = ppid
-        }
-    }
-
-    var masterNginxPid int32
-
-    for pid, ppid := range nginxProcesses {
-        if ppid == 0 {
-            masterNginxPid = pid
-
-            break
-        }
-    }
-
-    stdoutLogger.Println("found master nginx pid:", masterNginxPid)
-
-    return int(masterNginxPid), nil
+	pidData, _ := ioutil.ReadAll(pfile)
+	masterNginxPid := string(pidData)
+	masterNginxPid = strings.Replace(pid, "\n", "", -1)
+	return strconv.Atoi(masterNginxPid), nil
 }
 
 func signalNginxReload(pid int) error {
-    stdoutLogger.Printf("signaling master nginx process (pid: %d) -> SIGHUP\n", pid)
-    nginxProcess, nginxProcessErr := os.FindProcess(pid)
+	stdoutLogger.Printf("signaling master nginx process (pid: %d) -> SIGHUP\n", pid)
+	nginxProcess, nginxProcessErr := os.FindProcess(pid)
 
-    if nginxProcessErr != nil {
-        return nginxProcessErr
-    }
+	if nginxProcessErr != nil {
+		return nginxProcessErr
+	}
 
-    return nginxProcess.Signal(syscall.SIGHUP)
+	return nginxProcess.Signal(syscall.SIGHUP)
 }
 
 func main() {
-    watcher, watcherErr := fsnotify.NewWatcher()
-    if watcherErr != nil {
-        stderrLogger.Fatal(watcherErr)
-    }
-    defer watcher.Close()
+	watcher, watcherErr := fsnotify.NewWatcher()
+	if watcherErr != nil {
+		stderrLogger.Fatal(watcherErr)
+	}
+	defer watcher.Close()
 
-    done := make(chan bool)
-    go func() {
-        for {
-            select {
-            case event, ok := <-watcher.Events:
-                if !ok {
-                    return
-                }
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
 
-                if event.Op&fsnotify.Create == fsnotify.Create {
-                    if filepath.Base(event.Name) == "..data" {
-                        stdoutLogger.Println("config map updated")
+				if event.Op&fsnotify.Create == fsnotify.Create {
+					if filepath.Base(event.Name) == "..data" {
+						stdoutLogger.Println("config map updated")
 
-                        nginxPid, nginxPidErr := getMasterNginxPid()
-                        if nginxPidErr != nil {
-                            stderrLogger.Printf("getting master nginx pid failed: %s", nginxPidErr.Error())
+						nginxPid, nginxPidErr := getMasterNginxPid()
+						if nginxPidErr != nil {
+							stderrLogger.Printf("getting master nginx pid failed: %s", nginxPidErr.Error())
 
-                            continue
-                        }
+							continue
+						}
 
-                        if err := signalNginxReload(nginxPid); err != nil {
-                            stderrLogger.Printf("signaling master nginx process failed: %s", err)
-                        }
-                    }
-                }
-            case err, ok := <-watcher.Errors:
-                if !ok {
-                    return
-                }
-                stderrLogger.Printf("received watcher.Error: %s", err)
-            }
-        }
-    }()
+						if err := signalNginxReload(nginxPid); err != nil {
+							stderrLogger.Printf("signaling master nginx process failed: %s", err)
+						}
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				stderrLogger.Printf("received watcher.Error: %s", err)
+			}
+		}
+	}()
 
-    pathToWatch, ok := os.LookupEnv(watchPathEnvVarName)
-    if !ok {
-        pathToWatch = defaultNginxConfPath
-    }
+	pathToWatch, ok := os.LookupEnv(watchPathEnvVarName)
+	if !ok {
+		pathToWatch = defaultNginxConfPath
+	}
 
-    stdoutLogger.Printf("adding path: `%s` to watch\n", pathToWatch)
+	stdoutLogger.Printf("adding path: `%s` to watch\n", pathToWatch)
 
-    if err := watcher.Add(pathToWatch); err != nil {
-        stderrLogger.Fatal(err)
-    }
-    <-done
+	if err := watcher.Add(pathToWatch); err != nil {
+		stderrLogger.Fatal(err)
+	}
+	<-done
 }
