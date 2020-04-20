@@ -1,7 +1,7 @@
 /*
    2020年4月17日 14:19:02 by elvis
    kubernetes nginx configmap reload
-
+   更改通过nginx.pid确定pid，避免容器内多个进程，无法查找到nginx pid问题
 */
 package main
 
@@ -28,6 +28,7 @@ const (
 var stderrLogger = log.New(os.Stderr, "error: ", log.Lshortfile)
 var stdoutLogger = log.New(os.Stdout, "", log.Lshortfile)
 
+//getMasterNginxPid获取nginx主进程PID
 func getMasterNginxPid() (int, error) {
 
 	nginxPidPath, ok := os.LookupEnv(watchPidEnvVarName)
@@ -36,15 +37,28 @@ func getMasterNginxPid() (int, error) {
 	}
 
 	//获取nginx的进程ID
-	pfile, err := os.Open(nginxPidPath)
+	pfile, processesErr := os.Open(nginxPidPath)
+
+	if processesErr != nil {
+		return 0, processesErr
+	}
+
 	defer pfile.Close()
 
 	pidData, _ := ioutil.ReadAll(pfile)
-	masterNginxPid := string(pidData)
-	masterNginxPid = strings.Replace(pid, "\n", "", -1)
-	return strconv.Atoi(masterNginxPid), nil
+	masterNginxPidData := strings.Replace(string(pidData), "\n", "", -1)
+	masterNginxPid, ngxPidErr := strconv.Atoi(masterNginxPidData)
+
+	if ngxPidErr != nil {
+		return 0, ngxPidErr
+	}
+
+	stdoutLogger.Println("found master nginx pid:", masterNginxPid)
+
+	return masterNginxPid, nil
 }
 
+//signalNginxReload 热加载nginx配置
 func signalNginxReload(pid int) error {
 	stdoutLogger.Printf("signaling master nginx process (pid: %d) -> SIGHUP\n", pid)
 	nginxProcess, nginxProcessErr := os.FindProcess(pid)
